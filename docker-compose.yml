@@ -16,7 +16,7 @@ services:
     image: otel/opentelemetry-collector:0.23.0
     command: "--config /etc/otel-config.yaml"
     volumes:
-      - ./otel-config.yaml:/etc/otel-config.yaml
+      - ./otel-config.prod.yaml:/etc/otel-config.yaml
 
   jaeger:
     container_name: jaeger
