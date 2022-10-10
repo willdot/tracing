@@ -31,7 +31,7 @@ func main() {
 		redisClient: rdb,
 	}
 
-	err = jaegerTraceProvider("my-test", "jaeger", "6831")
+	err = jaegerTraceProvider("my-test", "collector", "6831")
 	if err != nil {
 		log.Fatal(err)
 	}
