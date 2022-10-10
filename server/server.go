@@ -10,14 +10,15 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
 )
 
 func main() {
 	fmt.Println("starting server")
 
 	rdb := redis.NewClient(&redis.Options{
-		DB:   0,
-		Addr: ":6379",
+		Addr: "redis:6379",
 	})
 	res, err := rdb.Ping(context.Background()).Result()
 	if err != nil {
@@ -30,7 +31,15 @@ func main() {
 		redisClient: rdb,
 	}
 
-	http.HandleFunc("/add", serv.Add)
+	err = jaegerTraceProvider("my-test", "jaeger", "6831")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	handler := http.HandlerFunc(serv.Add)
+	wrappedHandler := otelhttp.NewHandler(handler, "hello-instrumented")
+	http.Handle("/add", wrappedHandler)
+
 	http.HandleFunc("/get", serv.Get)
 	if err := http.ListenAndServe(":8000", nil); err != nil {
 		log.Fatal(err.Error())
@@ -46,7 +55,52 @@ type data struct {
 	Name string `json:"name"`
 }
 
+func (s *server) addToDB(ctx context.Context, d data) error {
+	tr := otel.Tracer("http")
+	_, span := tr.Start(ctx, "add to db")
+	defer span.End()
+
+	res, err := s.redisClient.Set(context.Background(), d.ID, d.Name, time.Minute).Result()
+	if err != nil {
+		return err
+	}
+
+	print(ctx)
+
+	time.Sleep(time.Second)
+
+	fmt.Printf("added to redis: %v\n", res)
+	return nil
+}
+
+func print(ctx context.Context) {
+	tr := otel.Tracer("http")
+	_, span := tr.Start(ctx, "print")
+
+	time.Sleep(time.Millisecond * 500)
+	defer span.End()
+
+}
+
+func parseData(ctx context.Context, input []byte) (data, error) {
+	tr := otel.Tracer("http")
+	ctx, span := tr.Start(ctx, "parse-data")
+	defer span.End()
+
+	var reqData data
+	err := json.Unmarshal(input, &reqData)
+	if err != nil {
+		return reqData, err
+	}
+
+	return reqData, nil
+}
+
 func (s *server) Add(w http.ResponseWriter, req *http.Request) {
+	tr := otel.Tracer("http")
+	ctx, span := tr.Start(req.Context(), "Add")
+	defer span.End()
+
 	body, err := ioutil.ReadAll(req.Body)
 	if err != nil {
 		fmt.Printf("could not read body: %s\n", err)
@@ -54,22 +108,19 @@ func (s *server) Add(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	var reqData data
-	err = json.Unmarshal(body, &reqData)
+	reqData, err := parseData(ctx, body)
 	if err != nil {
 		fmt.Printf("could not decode body: %s\n", err)
 		http.Error(w, "could not decode body", http.StatusBadRequest)
 		return
 	}
 
-	res, err := s.redisClient.Set(context.Background(), reqData.ID, reqData.Name, time.Minute).Result()
+	err = s.addToDB(ctx, reqData)
 	if err != nil {
 		fmt.Printf("failed to set in redis: %s\n", err)
 		http.Error(w, "failed to save request data", http.StatusInternalServerError)
 		return
 	}
-
-	fmt.Printf("added to redis: %v\n", res)
 
 	fmt.Fprintf(w, "You added user '%s' with id '%s'", reqData.Name, reqData.ID)
 }
