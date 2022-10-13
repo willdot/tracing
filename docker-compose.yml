@@ -1,15 +1,30 @@
 version: '3.9'
 services:
-  server:
+  accountserver:
+    container_name: accountserver
+    command: ./account-server
     build:
       context: ./
-      dockerfile: dockerfile
+      dockerfile: dockerfile.accountserver
     ports:
-      - "8000:8000"
-    command: ./server
+      - "8002:8002"
     depends_on:
       - redis
       - jaeger
+      - collector
+
+  edgeserver:
+    container_name: edgeserver
+    command: ./edge-server
+    build:
+      context: ./
+      dockerfile: dockerfile.edgeserver
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - jaeger
+      - collector
 
   collector:
     container_name: collector
