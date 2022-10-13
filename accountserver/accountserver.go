@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 
@@ -31,16 +29,16 @@ func main() {
 		redisClient: rdb,
 	}
 
-	err = traceprovider.JaegerTraceProvider("account_server", "collector", "6831")
+	err = traceprovider.JaegerTraceProvider("account-server", "collector", "6831")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	addHandler := http.HandlerFunc(serv.Add)
-	http.Handle("/add", otelhttp.NewHandler(addHandler, "add"))
+	addHandler := http.HandlerFunc(serv.AddAPIKey)
+	http.Handle("/addAPIKey", otelhttp.NewHandler(addHandler, "add-api-key"))
 
-	getHandler := http.HandlerFunc(serv.Get)
-	http.Handle("/get", otelhttp.NewHandler(getHandler, "get"))
+	getHandler := http.HandlerFunc(serv.CheckAPIKey)
+	http.Handle("/checkAPIKey", otelhttp.NewHandler(getHandler, "check-api-key"))
 
 	if err := http.ListenAndServe(":8002", nil); err != nil {
 		log.Fatal(err.Error())
@@ -51,79 +49,47 @@ type server struct {
 	redisClient *redis.Client
 }
 
-type Account struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
-func (s *server) Get(w http.ResponseWriter, req *http.Request) {
-	tr := otel.Tracer("account_server")
-	ctx, span := tr.Start(req.Context(), "Get")
+func (s *server) CheckAPIKey(w http.ResponseWriter, req *http.Request) {
+	tr := otel.Tracer("account-server")
+	ctx, span := tr.Start(req.Context(), "check-api-key")
 	defer span.End()
 
-	id := req.URL.Query().Get("id")
-	if id == "" {
-		http.Error(w, "id param not provided", http.StatusBadRequest)
+	apiKey := req.URL.Query().Get("apiKey")
+	if apiKey == "" {
+		http.Error(w, "apiKey param not provided", http.StatusBadRequest)
 		return
 	}
 
-	account, err := s.getFromRedis(ctx, id)
+	found, err := s.checkAPIKeyInRedis(ctx, apiKey)
 	if err != nil {
-		fmt.Printf("failed to get account from redis: %s\n", err)
-		http.Error(w, fmt.Sprintf("failed to get account for ID %s", id), http.StatusInternalServerError)
+		fmt.Printf("failed to check API key in redis: %s\n", err)
+		http.Error(w, "failed to check API key in redis", http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	jsonResp, err := json.Marshal(account)
-	if err != nil {
-		fmt.Printf("failed to get encode account from redis: %s\n", err)
-		http.Error(w, fmt.Sprintf("failed to get account for ID %s", id), http.StatusInternalServerError)
+	if found {
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	w.Write(jsonResp)
+	w.WriteHeader(http.StatusNotFound)
 }
 
-func (s *server) Add(w http.ResponseWriter, req *http.Request) {
-	tr := otel.Tracer("account_server")
-	ctx, span := tr.Start(req.Context(), "Add")
+func (s *server) AddAPIKey(w http.ResponseWriter, req *http.Request) {
+	tr := otel.Tracer("account-server")
+	ctx, span := tr.Start(req.Context(), "add-api-key")
 	defer span.End()
 
-	body, err := ioutil.ReadAll(req.Body)
-	if err != nil {
-		fmt.Printf("could not read body: %s\n", err)
-		http.Error(w, "could not read body", http.StatusBadRequest)
+	apiKey := req.Header.Get("apiKey")
+	if apiKey == "" {
+		http.Error(w, "missing apiKey header", http.StatusBadRequest)
 		return
 	}
 
-	reqData, err := decodeAccount(ctx, body)
+	err := s.addAPIKeyToRedis(ctx, apiKey)
 	if err != nil {
-		fmt.Printf("could not decode body: %s\n", err)
-		http.Error(w, "could not decode body", http.StatusBadRequest)
+		fmt.Printf("failed to add API key in redis: %s\n", err)
+		http.Error(w, "failed to add API key", http.StatusInternalServerError)
 		return
 	}
-
-	err = s.addToRedis(ctx, reqData)
-	if err != nil {
-		fmt.Printf("failed to add account in redis: %s\n", err)
-		http.Error(w, "failed to add account", http.StatusInternalServerError)
-		return
-	}
-
-	fmt.Fprintf(w, "You added user '%s' with id '%s'", reqData.Name, reqData.ID)
-}
-
-func decodeAccount(ctx context.Context, input []byte) (Account, error) {
-	tr := otel.Tracer("account_server")
-	ctx, span := tr.Start(ctx, "decode-account")
-	defer span.End()
-
-	var reqData Account
-	err := json.Unmarshal(input, &reqData)
-	if err != nil {
-		return reqData, err
-	}
-
-	return reqData, nil
 }

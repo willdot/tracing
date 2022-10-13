@@ -5,15 +5,16 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-redis/redis/v8"
 	"go.opentelemetry.io/otel"
 )
 
-func (s *server) addToRedis(ctx context.Context, account Account) error {
-	tr := otel.Tracer("account_server")
-	_, span := tr.Start(ctx, "add to redis")
+func (s *server) addAPIKeyToRedis(ctx context.Context, apiKey string) error {
+	tr := otel.Tracer("account-server")
+	_, span := tr.Start(ctx, "add-api-key-to-redis")
 	defer span.End()
 
-	res, err := s.redisClient.Set(ctx, account.ID, account.Name, time.Minute).Result()
+	res, err := s.redisClient.Set(ctx, apiKey, 1, time.Minute*5).Result()
 	if err != nil {
 		return err
 	}
@@ -22,20 +23,20 @@ func (s *server) addToRedis(ctx context.Context, account Account) error {
 	return nil
 }
 
-func (s *server) getFromRedis(ctx context.Context, id string) (Account, error) {
-	tr := otel.Tracer("account_server")
-	_, span := tr.Start(ctx, "get from redis")
+func (s *server) checkAPIKeyInRedis(ctx context.Context, apiKey string) (bool, error) {
+	tr := otel.Tracer("account-server")
+	_, span := tr.Start(ctx, "check-api-key-in-redis")
 	defer span.End()
 
-	res, err := s.redisClient.Get(ctx, id).Result()
-	if err != nil {
-		return Account{}, err
+	_, err := s.redisClient.Get(ctx, apiKey).Result()
+
+	if err == nil {
+		return true, nil
 	}
 
-	account := Account{
-		ID:   id,
-		Name: res,
+	if err == redis.Nil {
+		return false, nil
 	}
 
-	return account, nil
+	return false, err
 }
