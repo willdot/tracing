@@ -5,9 +5,11 @@ services:
     command: ./account-server
     build:
       context: ./
-      dockerfile: dockerfile.accountserver
+      dockerfile: accountserver/dockerfile
     ports:
       - "8002:8002"
+    environment:
+      REDIS_URL: redis:6379
     depends_on:
       - redis
       - jaeger
@@ -18,13 +20,17 @@ services:
     command: ./edge-server
     build:
       context: ./
-      dockerfile: dockerfile.edgeserver
+      dockerfile: edgeserver/dockerfile
     ports:
       - "8000:8000"
+    environment:
+      AMQP_SERVER_URL: amqp://guest:guest@rabbit:5672/
+      ACCOUNT_SERVER_URL: http://accountserver:8002
     depends_on:
       - redis
       - jaeger
       - collector
+      - rabbitmq
 
   collector:
     container_name: collector
@@ -46,3 +52,10 @@ services:
     restart: unless-stopped
     ports:
       - "6387:6379"
+  
+  rabbitmq:
+    container_name: rabbit
+    ports:
+    - "15672:15672"
+    - "5672:5672"
+    image: "rabbitmq:3.8-management-alpine"

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/willdot/tracing/traceprovider"
@@ -15,8 +16,9 @@ import (
 func main() {
 	fmt.Println("starting account server")
 
+	redisURL := os.Getenv("REDIS_URL")
 	rdb := redis.NewClient(&redis.Options{
-		Addr: "redis:6379",
+		Addr: redisURL,
 	})
 	res, err := rdb.Ping(context.Background()).Result()
 	if err != nil {

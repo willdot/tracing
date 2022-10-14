@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/willdot/tracing/traceprovider"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -14,9 +17,17 @@ import (
 func main() {
 	fmt.Println("starting edge server")
 
-	serv := server{}
+	rabbitClient, err := setupRabbit()
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("connected to rabbit")
 
-	err := traceprovider.JaegerTraceProvider("edge-server", "collector", "6831")
+	serv := server{
+		rabbit: rabbitClient,
+	}
+
+	err = traceprovider.JaegerTraceProvider("edge-server", "collector", "6831")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -30,6 +41,56 @@ func main() {
 }
 
 type server struct {
+	rabbit *rabbitClient
+}
+
+func (s *server) AddData(w http.ResponseWriter, req *http.Request) {
+	tr := otel.Tracer("edge-server")
+	ctx, span := tr.Start(req.Context(), "add-data")
+	defer span.End()
+
+	apiKey := req.Header.Get("apiKey")
+	if apiKey == "" {
+		http.Error(w, "missing apiKey header", http.StatusBadRequest)
+		return
+	}
+
+	// first check if the API key in the header exists
+	valid, err := checkApiKey(ctx, apiKey)
+	if err != nil {
+		fmt.Printf("failed to validate API key: %s\n", err)
+		http.Error(w, "failed to validate API key", http.StatusInternalServerError)
+		return
+	}
+
+	if !valid {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	body, err := ioutil.ReadAll(req.Body)
+	if err != nil {
+		fmt.Printf("could not read body: %s\n", err)
+		http.Error(w, "could not read body", http.StatusBadRequest)
+		return
+	}
+
+	var reqData map[string]interface{}
+	err = json.Unmarshal(body, &reqData)
+	if err != nil {
+		fmt.Printf("could not decode body: %s\n", err)
+		http.Error(w, "could not decode body", http.StatusBadRequest)
+		return
+	}
+
+	err = s.rabbit.send(reqData)
+	if err != nil {
+		fmt.Printf("could publish to rabbit: %s\n", err)
+		http.Error(w, "failed to process request", http.StatusInternalServerError)
+		return
+	}
+
+	w.Write([]byte("processed"))
 }
 
 func checkApiKey(ctx context.Context, apiKey string) (bool, error) {
@@ -41,7 +102,9 @@ func checkApiKey(ctx context.Context, apiKey string) (bool, error) {
 		Transport: otelhttp.NewTransport(http.DefaultTransport),
 	}
 
-	req, err := http.NewRequest("GET", fmt.Sprintf("http://accountserver:8002/checkAPIKey?apiKey=%s", apiKey), nil)
+	url := os.Getenv("ACCOUNT_SERVER_URL")
+
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/checkAPIKey?apiKey=%s", url, apiKey), nil)
 	if err != nil {
 		return false, err
 	}
@@ -62,30 +125,4 @@ func checkApiKey(ctx context.Context, apiKey string) (bool, error) {
 
 	// probably something else happened so keep going? maybe?
 	return true, nil
-}
-
-func (s *server) AddData(w http.ResponseWriter, req *http.Request) {
-	tr := otel.Tracer("edge-server")
-	ctx, span := tr.Start(req.Context(), "add-data")
-	defer span.End()
-
-	apiKey := req.Header.Get("apiKey")
-	if apiKey == "" {
-		http.Error(w, "missing apiKey header", http.StatusBadRequest)
-		return
-	}
-
-	// first check if the API key in the header exists
-	valid, err := checkApiKey(ctx, apiKey)
-	if err != nil {
-		http.Error(w, "failed to validate API key", http.StatusInternalServerError)
-		return
-	}
-
-	if !valid {
-		w.WriteHeader(http.StatusUnauthorized)
-		return
-	}
-
-	w.Write([]byte("so far so good"))
 }
