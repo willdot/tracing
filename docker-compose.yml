@@ -27,10 +27,22 @@ services:
       AMQP_SERVER_URL: amqp://guest:guest@rabbit:5672/
       ACCOUNT_SERVER_URL: http://accountserver:8002
     depends_on:
-      - redis
       - jaeger
       - collector
       - rabbitmq
+
+  dataservice:
+    container_name: dataservice
+    command: ./data-service
+    build:
+      context: ./
+      dockerfile: dataservice/dockerfile
+    environment:
+      AMQP_SERVER_URL: amqp://guest:guest@rabbit:5672/
+    depends_on:
+      - rabbitmq
+      - jaeger
+      - collector
 
   collector:
     container_name: collector
